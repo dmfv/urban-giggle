@@ -8,7 +8,6 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
-//#include <queue>
 
 
 namespace fs = std::filesystem;
@@ -22,43 +21,32 @@ namespace textcolor {
     const std::string MAGENTA { "\033[1;35m" };
     const std::string CYAN    { "\033[1;36m" };
     const std::string WHITE   { "\033[1;37m" };
-    const std::string DEFAULT { "\033[0m" };
+    const std::string DEFAULT { "\033[0m"    };
 };
 
-class FilePart {
+class File {
 public:
-    FilePart() : start(0), end(0) {}
-    FilePart(const fs::path& filePath, std::streamsize start, std::streamsize end)
+    File() {}
+    File(const fs::path& filePath)
         : filePath(filePath)
         , file(filePath, std::ifstream::in)
-        , start(start)
-        , end(end)
-        , curr(start)
     { }
 
-    FilePart(const FilePart&) = delete;  // because ifstream
-    FilePart& operator=(const FilePart&) = delete; // because ifstream
+    File(const File&) = delete;  // because ifstream
+    File& operator=(const File&) = delete;
 
-    FilePart(FilePart&&) = default;
-    FilePart& operator=(FilePart&&) = default;
-    ~FilePart() { };
+    File(File&&) = default;
+    File& operator=(File&&) = default;
+    ~File() { };
 
     std::optional<std::string> GetLine() {
-        std::optional<std::string> line{ std::nullopt };
         if (file.is_open()) {
-            if (curr > end || curr == EOF ) {
-                return line;
+            std::string tempStr;
+            if (std::getline(file, tempStr)) {
+                return tempStr;
             }
-            // TODO: maybe don't need all this curr end begin because ifstream has it's own
-            std::string tempLine;
-            std::getline(file, tempLine);
-            auto oldCurr = curr;
-            curr = file.tellg();
-
-            // file.seekg(curr, std::ios::cur);
-            line = tempLine;
         }
-        return line;
+        return std::nullopt;
     }
 
     const fs::path& GetFilePath() const { return filePath; }
@@ -66,9 +54,6 @@ public:
 private:
     fs::path filePath;
     std::ifstream file;
-    std::streamsize start;
-    std::streamsize end;
-    std::streamsize curr;
 };
 
 
@@ -85,83 +70,76 @@ public:
 
     ~FileRegexProcessor() {
         stop = true;
-        cvFilePartsQueue.notify_all();
+        cvFilesQueue.notify_all();
         for (auto& thread : threads) {
             thread.join();
         }
-        std::cout << "All workers stopped\n";
+        std::cout << "All " << threads.size() << " workers stopped\n";
     }
 
     bool IsFinished() const { 
-        std::lock_guard<std::mutex> lock(filePartsQueueMutex);
-        return filePartsQueue.empty();
+        std::lock_guard<std::mutex> lock(filesQueueMutex);
+        return filesQueue.empty();
     }
 
     // TODO: fix this functions overload
-    void AddFileSections(std::list<FilePart>&& fileParts) {
-        std::unique_lock<std::mutex> lock{ filePartsQueueMutex };
-        std::cout << "Adding file sections\n";
-        for (auto& filePart : fileParts) {
-            // std::cerr << filePart.GetFilePath() << std::endl;
-            filePartsQueue.emplace_back(std::move(filePart));
-        }
-        cvFilePartsQueue.notify_all();
+    void AddFileSections(File&& file) {
+        std::unique_lock<std::mutex> lock{ filesQueueMutex };
+        //std::cout << "Adding file sections\n";
+        filesQueue.emplace_back(std::move(file));
+        cvFilesQueue.notify_all();
     }
 
-    void AddFileSections(std::list<FilePart>& fileParts) {
-        AddFileSections(std::move(fileParts));
+    void AddFileSections(File& file) {
+        AddFileSections(std::move(file));
     }
 
 private:
-    void Job(size_t threadId) {
-        std::cout << "Processing \n";
-        std::optional<FilePart> filePart;
+    void Job([[maybe_unused]] size_t threadId) {
+        std::optional<File> file;
         while (!stop) {
             // some busy work here
-            std::unique_lock<std::mutex> lock(filePartsQueueMutex);
-            cvFilePartsQueue.wait(lock, [&] { return stop || !filePartsQueue.empty(); });
-            if (!filePartsQueue.empty()) {
-                // std::cout << "PROCESSING " << processId << std::endl;
-                filePart = std::move(filePartsQueue.front());
-                filePartsQueue.pop_front();
+            {
+                std::unique_lock<std::mutex> lock(filesQueueMutex);
+                cvFilesQueue.wait(lock, [&] { return stop || !filesQueue.empty(); });
+                if (!filesQueue.empty()) {
+                    file = std::move(filesQueue.front());
+                    filesQueue.pop_front();
+                }
             }
-            if (!filePart.has_value())
+            if (!file.has_value())
                 continue;
-            auto optLine = filePart->GetLine();
+            auto optLine = file->GetLine();
             while (optLine.has_value()) {
                 auto matchedLine = ProcessLine(*optLine);
-                if (matchedLine.has_value()) {
-                    std::cout << textcolor::MAGENTA << filePart->GetFilePath() << textcolor::DEFAULT << ": " << *matchedLine << std::endl;
+                if (matchedLine != *optLine) {
+                    thread_local std::string out{ textcolor::MAGENTA + file->GetFilePath().string() + textcolor::DEFAULT + ": " + matchedLine + '\n' };
+                    std::cout << out;
                 }
-                optLine = filePart->GetLine();
+                optLine = file->GetLine();
             }
         }
-        std::cout << "Stopping \n";
     }
 
-    std::optional<std::string> ProcessLine(const std::string& line) const {
-        if (!regex_search(line, regex)) {
-            return std::nullopt;
-        }
-        // "[$&]"
+    inline std::string ProcessLine(const std::string& line) const {
         static const std::string REPLACE_FORMAT{ textcolor::GREEN + "$&" + textcolor::DEFAULT };
         return std::regex_replace(line, regex, REPLACE_FORMAT);
     }
 
     const std::regex regex;
     std::atomic<bool> stop{ false };
-    mutable std::mutex filePartsQueueMutex;
-    std::condition_variable cvFilePartsQueue;
-    std::list<FilePart> filePartsQueue;
+    mutable std::mutex filesQueueMutex;
+    std::condition_variable cvFilesQueue;
+    std::list<File> filesQueue;
     std::list<std::thread> threads;
 };
 
 
-class FilePartsBuilder {
+class FilesBuilder {
 public:
-    static std::list<FilePart> Build(const fs::path& path, size_t filePartitionNum, FileRegexProcessor& fp) {
+    static std::list<File> Build(const fs::path& path, FileRegexProcessor& fp) {
         std::list<fs::path> directories;
-        std::list<FilePart> files;
+        std::list<File> files;
         directories.push_back(path);
         while (!directories.empty()) {
             auto _path = directories.front();
@@ -172,35 +150,23 @@ public:
                     }
                     else {
                         // TODO: maybe use mmap that could be faster
-                        std::cout << entry.path() << std::endl;
-                        auto tempList = ProcessFile(entry.path(), filePartitionNum);
-                        fp.AddFileSections(std::move(tempList));
-                        //files.splice(files.end(), tempList);
+                        // std::cout << entry.path() << std::endl;
+                        fp.AddFileSections(File(entry.path()));
                     }
                 }
             }
             else {
-                // TODO: maybe use mmap that could be faster
-                std::cout << _path << std::endl;
-                auto tempList = ProcessFile(_path, filePartitionNum);
-                fp.AddFileSections(std::move(tempList));
-                //files.splice(files.end(), tempList);
+                fp.AddFileSections(File(_path));
             }
             directories.pop_front();
         }
         return files;
     }
 
-    static std::list<FilePart> ProcessFile(const fs::path& path, size_t filePartitionNum) {
+    static std::list<File> ProcessFile(const fs::path& path) {
         auto fileSize = GetFileSize(path);
-        std::list<FilePart> splittedFile;
-        std::streamsize partSize = fileSize / filePartitionNum;
+        std::list<File> splittedFile;
 
-        for (size_t i = 0; i < filePartitionNum; ++i) {
-            std::streamsize start = partSize * i;
-            std::streamsize end = partSize * (i + 1);
-            splittedFile.emplace_back(path, start, end);
-        }
         return splittedFile;
     }
 
@@ -212,6 +178,38 @@ public:
 
 
 
+
+// only for simple speed tests
+#include <chrono>
+
+class Timer {
+public:
+    Timer() {
+        start();
+    }
+
+    ~Timer() {
+        timePast(stop());
+    }
+    void start() {
+        start_time = std::chrono::high_resolution_clock::now();
+    }
+
+    double stop() {
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        return elapsed_time.count();
+    }
+
+    void timePast(double elapsed_time) {
+        std::cout << "execution time: " << elapsed_time << " ms" << std::endl;
+    }
+
+private:
+    std::chrono::high_resolution_clock::time_point start_time;
+};
+
+
 int main(int argc, char** argv) {
     if (argc <= 2) {
         std::cerr << "Usage: grep PATTERN PATH\n"
@@ -220,12 +218,33 @@ int main(int argc, char** argv) {
     std::string regex = argv[1];
     fs::path path = argv[2];
 
-     //FileRegexProcessor fp(std::thread::hardware_concurrency(), regex);
-     FileRegexProcessor fp(1, regex);
-     FilePartsBuilder::Build(path, 1, fp);
-     //fp.AddFileSections(FilePartsBuilder::Build(path, 1));
+    double th1, th16;
+    {
+        Timer t;
+        FileRegexProcessor fp(std::thread::hardware_concurrency(), regex);
+        //FileRegexProcessor fp(1, regex);
 
-     while (!fp.IsFinished()) {}
-     // auto fps = FilePartsBuilder::Build(path, 2);
-     //std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        FilesBuilder::Build(path, fp);
+
+        while (!fp.IsFinished()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        th16 = t.stop();
+    }
+
+    {
+        Timer t;
+        //FileRegexProcessor fp(std::thread::hardware_concurrency(), regex);
+        FileRegexProcessor fp(1, regex);
+
+        FilesBuilder::Build(path, fp);
+
+        while (!fp.IsFinished()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        th1 = t.stop();
+    }
+
+    std::cout << "th1 : " << th1 << std::endl;
+    std::cout << "th16 : " << th16 << std::endl;
 }
