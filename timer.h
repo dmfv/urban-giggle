@@ -1,5 +1,6 @@
 // only for simplest 'speed tests'
 #include <chrono>
+#include <iostream>
 
 class Timer {
 public:
