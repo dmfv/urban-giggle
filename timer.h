@@ -4,16 +4,9 @@
 
 class Timer {
 public:
-    Timer() {
-        start();
-    }
-
-    ~Timer() {
-        timePast(stop());
-    }
-    void start() {
-        start_time = std::chrono::high_resolution_clock::now();
-    }
+    Timer() { start(); }
+    ~Timer() { timePast(stop()); }
+    void start() { start_time = std::chrono::high_resolution_clock::now(); }
 
     double stop() {
         auto end_time = std::chrono::high_resolution_clock::now();
