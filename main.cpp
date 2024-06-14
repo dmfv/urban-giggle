@@ -9,7 +9,6 @@
 #include <mutex>
 #include <condition_variable>
 
-#include "timer.h"
 
 namespace fs = std::filesystem;
 
@@ -24,7 +23,6 @@ namespace textcolor {
     const std::string WHITE   { "\033[1;37m" };
     const std::string DEFAULT { "\033[0m"    };
 };
-
 
 class File {
 public:
@@ -92,8 +90,11 @@ public:
         cvFilesQueue.notify_all();
     }
 
-    void AddFileSections(File& file) {
-        AddFileSections(std::move(file));
+    void AddFileSections(std::list<File>&& files) {
+        std::unique_lock<std::mutex> lock{ filesQueueMutex };
+        //std::cout << "Adding file sections\n";)
+        filesQueue.splice(filesQueue.end(), std::move(files));
+        cvFilesQueue.notify_all();
     }
 
 private:
@@ -139,7 +140,7 @@ private:
 
 class FilesBuilder {
 public:
-    static std::list<File> Build(const fs::path& path, FileRegexProcessor& fp) {
+    static void Build(const fs::path& path, FileRegexProcessor& fp) {
         std::list<fs::path> directories;
         std::list<File> files;
         directories.push_back(path);
@@ -153,16 +154,17 @@ public:
                     else {
                         // TODO: maybe use mmap that could be faster
                         // std::cout << entry.path() << std::endl;
-                        fp.AddFileSections(File(entry.path()));
+                        files.push_back(std::move(File(entry.path())));
                     }
                 }
             }
             else {
-                fp.AddFileSections(File(_path));
+                files.push_back(std::move(File(_path)));
             }
+            fp.AddFileSections(std::move(files));
             directories.pop_front();
         }
-        return files;
+        
     }
 
     static std::list<File> ProcessFile(const fs::path& path) {
@@ -176,6 +178,39 @@ public:
         std::ifstream tempFile(path, std::ios::binary | std::ios::ate);
         return tempFile.tellg();
     }
+};
+
+
+
+
+// only for simple speed tests
+#include <chrono>
+
+class Timer {
+public:
+    Timer() {
+        start();
+    }
+
+    ~Timer() {
+        timePast(stop());
+    }
+    void start() {
+        start_time = std::chrono::high_resolution_clock::now();
+    }
+
+    double stop() {
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        return elapsed_time.count();
+    }
+
+    void timePast(double elapsed_time) {
+        std::cout << "execution time: " << elapsed_time << " ms" << std::endl;
+    }
+
+private:
+    std::chrono::high_resolution_clock::time_point start_time;
 };
 
 
