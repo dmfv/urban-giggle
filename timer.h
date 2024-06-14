@@ -1,4 +1,5 @@
 // only for simplest 'speed tests'
+#pragma once
 #include <chrono>
 #include <iostream>
 
