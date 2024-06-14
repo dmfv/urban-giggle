@@ -9,6 +9,7 @@
 #include <mutex>
 #include <condition_variable>
 
+#include "timer.h"
 
 namespace fs = std::filesystem;
 
@@ -23,6 +24,7 @@ namespace textcolor {
     const std::string WHITE   { "\033[1;37m" };
     const std::string DEFAULT { "\033[0m"    };
 };
+
 
 class File {
 public:
@@ -174,39 +176,6 @@ public:
         std::ifstream tempFile(path, std::ios::binary | std::ios::ate);
         return tempFile.tellg();
     }
-};
-
-
-
-
-// only for simple speed tests
-#include <chrono>
-
-class Timer {
-public:
-    Timer() {
-        start();
-    }
-
-    ~Timer() {
-        timePast(stop());
-    }
-    void start() {
-        start_time = std::chrono::high_resolution_clock::now();
-    }
-
-    double stop() {
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-        return elapsed_time.count();
-    }
-
-    void timePast(double elapsed_time) {
-        std::cout << "execution time: " << elapsed_time << " ms" << std::endl;
-    }
-
-private:
-    std::chrono::high_resolution_clock::time_point start_time;
 };
 
 
