@@ -117,7 +117,7 @@ private:
                 auto matchedLine = ProcessLine(*optLine);
                 if (matchedLine != *optLine) {
                     thread_local std::string out{ textcolor::MAGENTA + file->GetFilePath().string() + textcolor::DEFAULT + ": " + matchedLine + '\n' };
-                    std::cout << out;
+                    //std::cout << out;
                 }
                 optLine = file->GetLine();
             }
@@ -193,7 +193,7 @@ public:
     }
 
     ~Timer() {
-        timePast(stop());
+        //timePast(stop());
     }
     void start() {
         start_time = std::chrono::high_resolution_clock::now();
@@ -215,9 +215,10 @@ private:
 
 
 int main(int argc, char** argv) {
-    if (argc <= 2) {
+    if (argc != 3) {
         std::cerr << "Usage: grep PATTERN PATH\n"
                   << "Example: grep.out 123 ./grep.out";
+        return 0;
     }
     std::string regex = argv[1];
     fs::path path = argv[2];
