@@ -32,7 +32,7 @@ public:
         , file(filePath, std::ifstream::in)
     { }
 
-    File(const File&) = delete;  // because ifstream
+    File(const File&) = delete;  // because of ifstream
     File& operator=(const File&) = delete;
 
     File(File&&) = default;
@@ -82,17 +82,14 @@ public:
         return filesQueue.empty();
     }
 
-    // TODO: fix this functions overload
     void AddFileSections(File&& file) {
         std::unique_lock<std::mutex> lock{ filesQueueMutex };
-        //std::cout << "Adding file sections\n";
         filesQueue.emplace_back(std::move(file));
         cvFilesQueue.notify_all();
     }
 
     void AddFileSections(std::list<File>&& files) {
         std::unique_lock<std::mutex> lock{ filesQueueMutex };
-        //std::cout << "Adding file sections\n";)
         filesQueue.splice(filesQueue.end(), std::move(files));
         cvFilesQueue.notify_all();
     }
@@ -100,6 +97,12 @@ public:
 private:
     void Job([[maybe_unused]] size_t threadId) {
         std::optional<File> file;
+        thread_local std::string matchedLines{ []() {
+            std::string temp;
+            temp.reserve(THREAD_LOCAL_STORAGE_BYTES);
+            return temp;
+        }() };
+
         while (!stop) {
             // some busy work here
             {
@@ -110,24 +113,46 @@ private:
                     filesQueue.pop_front();
                 }
             }
-            if (!file.has_value())
-                continue;
-            auto optLine = file->GetLine();
-            while (optLine.has_value()) {
-                auto matchedLine = ProcessLine(*optLine);
-                if (matchedLine != *optLine) {
-                    thread_local std::string out{ textcolor::MAGENTA + file->GetFilePath().string() + textcolor::DEFAULT + ": " + matchedLine + '\n' };
-                    //std::cout << out;
+            if (file.has_value()) {
+                auto optLine = file->GetLine();
+                while (optLine.has_value()) {
+                    auto lineAfterRegexReplace = ProcessLine(*optLine);
+                    if (lineAfterRegexReplace != *optLine) { // if regex_replaces did something
+                        std::string newMatch{
+                            "thread id: " +
+                            std::to_string(threadId) +
+                            " " +
+                            textcolor::MAGENTA +
+                            file->GetFilePath().string() +
+                            textcolor::DEFAULT +
+                            ": " +
+                            lineAfterRegexReplace +
+                            '\n' };
+                        if (matchedLines.size() + newMatch.size() >= THREAD_LOCAL_STORAGE_BYTES) {
+                            DumpMatchedLines(matchedLines);
+                        }
+                        matchedLines += std::move(newMatch);
+                    }
+                    optLine = file->GetLine();
                 }
-                optLine = file->GetLine();
+            }
+            if (!matchedLines.empty()) {
+                DumpMatchedLines(matchedLines);
             }
         }
+    }
+
+    inline void DumpMatchedLines(std::string& matchedLines) {
+        std::cout << matchedLines;
+        matchedLines = "";
     }
 
     inline std::string ProcessLine(const std::string& line) const {
         static const std::string REPLACE_FORMAT{ textcolor::GREEN + "$&" + textcolor::DEFAULT };
         return std::regex_replace(line, regex, REPLACE_FORMAT);
     }
+
+    constexpr static inline size_t THREAD_LOCAL_STORAGE_BYTES { 1024 };
 
     const std::regex regex;
     std::atomic<bool> stop{ false };
@@ -143,6 +168,7 @@ public:
     static void Build(const fs::path& path, FileRegexProcessor& fp) {
         std::list<fs::path> directories;
         std::list<File> files;
+        static size_t FILES_SIZE_THRESHOLD { 10 };
         directories.push_back(path);
         while (!directories.empty()) {
             auto _path = directories.front();
@@ -152,9 +178,10 @@ public:
                         directories.push_back(entry);
                     }
                     else {
-                        // TODO: maybe use mmap that could be faster
-                        // std::cout << entry.path() << std::endl;
                         files.push_back(std::move(File(entry.path())));
+                        if (files.size() >= FILES_SIZE_THRESHOLD) {
+                            fp.AddFileSections(std::move(files));
+                        }
                     }
                 }
             }
@@ -181,41 +208,8 @@ public:
 };
 
 
-
-
-// only for simple speed tests
-#include <chrono>
-
-class Timer {
-public:
-    Timer() {
-        start();
-    }
-
-    ~Timer() {
-        //timePast(stop());
-    }
-    void start() {
-        start_time = std::chrono::high_resolution_clock::now();
-    }
-
-    double stop() {
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-        return elapsed_time.count();
-    }
-
-    void timePast(double elapsed_time) {
-        std::cout << "execution time: " << elapsed_time << " ms" << std::endl;
-    }
-
-private:
-    std::chrono::high_resolution_clock::time_point start_time;
-};
-
-
 int main(int argc, char** argv) {
-    if (argc != 3) {
+    if (argc < 3) {
         std::cerr << "Usage: grep PATTERN PATH\n"
                   << "Example: grep.out 123 ./grep.out";
         return 0;
@@ -223,33 +217,11 @@ int main(int argc, char** argv) {
     std::string regex = argv[1];
     fs::path path = argv[2];
 
-    double th1, th16;
-    {
-        Timer t;
-        FileRegexProcessor fp(std::thread::hardware_concurrency(), regex);
-        //FileRegexProcessor fp(1, regex);
+    FileRegexProcessor fp(std::thread::hardware_concurrency(), regex);
 
-        FilesBuilder::Build(path, fp);
+    FilesBuilder::Build(path, fp);
 
-        while (!fp.IsFinished()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        th16 = t.stop();
+    while (!fp.IsFinished()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-
-    {
-        Timer t;
-        //FileRegexProcessor fp(std::thread::hardware_concurrency(), regex);
-        FileRegexProcessor fp(1, regex);
-
-        FilesBuilder::Build(path, fp);
-
-        while (!fp.IsFinished()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        th1 = t.stop();
-    }
-
-    std::cout << "th1 : " << th1 << std::endl;
-    std::cout << "th16 : " << th16 << std::endl;
 }
