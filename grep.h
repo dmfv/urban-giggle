@@ -13,6 +13,17 @@
 namespace fs = std::filesystem;
 
 
+inline bool isValidRegex(const std::string& regex) {
+    try {
+        std::regex re(regex);
+    }
+    catch (const std::regex_error& ) {
+        return false;
+    }
+    return true;
+}
+
+
 namespace textcolor {
     const inline std::string BLACK   { "\033[1;30m" };
     const inline std::string RED     { "\033[1;31m" };
