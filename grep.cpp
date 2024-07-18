@@ -117,7 +117,7 @@ void FilesBuilder::Build(const fs::path& path, FileRegexProcessor& fp) {
                     directories.push_back(entry);
                 }
                 else {
-                    files.push_back(std::move(File(entry.path())));
+                    files.push_back(File(entry.path()));
                     if (files.size() >= FILES_SIZE_THRESHOLD) {
                         fp.AddFileSections(std::move(files));
                     }
@@ -125,7 +125,7 @@ void FilesBuilder::Build(const fs::path& path, FileRegexProcessor& fp) {
             }
         }
         else {
-            files.push_back(std::move(File(_path)));
+            files.push_back(File(_path));
         }
         fp.AddFileSections(std::move(files));
         directories.pop_front();
