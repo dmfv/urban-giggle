@@ -1,4 +1,4 @@
-# Urban Giggle
+# Urban Giggle (yeah github generated name)
 Urban Giggle is a grep-like utility demonstrating multithreading skills. Tested on Linux (Ubuntu) and Windows.
 
 # Features
